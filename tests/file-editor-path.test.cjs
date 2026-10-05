@@ -7,7 +7,11 @@ const vm = require('node:vm');
 const stripTypeScriptTypes = typeof Bun !== 'undefined'
  ? source => new Bun.Transpiler({loader:'ts'}).transformSync(source)
  : require('node:module').stripTypeScriptTypes;
-function handler() {
+async function handler() {
+ if (typeof Bun !== 'undefined') {
+  const {createFileEditorTool} = await import('../src/llm/tools/fileEditor.ts');
+  return (input, context) => createFileEditorTool(context).execute(input, {toolCallId:'synthetic',messages:[]});
+ }
  const source = fs.readFileSync(path.join(__dirname,'../src/llm/tools/fileEditor.ts'),'utf8');
  const body = source.slice(source.indexOf('const fileBackups'),source.indexOf('/**\n * Creates a file editor'));
  const context={fs,path,normalizePath:p=>p.replace(/\\/g,'/')};vm.createContext(context);
@@ -19,7 +23,7 @@ test('file editor stays within vault for sibling and symlink paths',async()=>{
   const base=path.join(root,'vault'), outside=path.join(root,'vault-other');
   fs.mkdirSync(base);fs.mkdirSync(outside);fs.writeFileSync(path.join(outside,'secret'),'synthetic outside');
   fs.symlinkSync(outside,path.join(base,'escape'),'dir');
-  const run=handler();const context={basePath:base};
+  const run=await handler();const context={basePath:base};
   for(const target of ['../vault-other/secret','escape/secret',path.join(outside,'secret')]) {
    assert.match(await run({command:'view',path:target},context),/Security error/);
    assert.match(await run({command:'insert',path:target,insert_line:0,new_str:'changed'},context),/Security error/);
