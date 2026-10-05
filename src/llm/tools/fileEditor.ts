@@ -2,7 +2,6 @@ import * as fs from "fs";
 import * as path from "path";
 import { z } from "zod";
 import { tool } from "ai";
-import { normalizePath } from "obsidian";
 
 // Schema for file editor tool commands
 // @todo - this should be a discriminated union type. note all the args are
@@ -62,18 +61,34 @@ const handleToolUse = async (
       throw new Error("path is required");
     }
 
-    // Resolve the path relative to the base path
-    const resolvedPath = normalizePath(path.resolve(context.basePath, x));
+    const basePath = path.resolve(context.basePath);
+    const resolvedPath = path.resolve(basePath, x);
+    const isWithin = (base: string, target: string) => {
+      const relative = path.relative(base, target);
+      return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    };
+    const rejectPath = () => {
+      throw new Error(`Security error: Attempted to access path outside of the base directory: ${x}`);
+    };
+    if (!isWithin(basePath, resolvedPath)) rejectPath();
 
-    // Ensure the resolved path is within the base path to prevent directory traversal
-    const normalizedBasePath = normalizePath(context.basePath);
-    const normalizedResolvedPath = normalizePath(resolvedPath);
-
-    if (!normalizedResolvedPath.startsWith(normalizedBasePath)) {
-      throw new Error(
-        `Security error: Attempted to access path outside of the base directory: ${x}`
-      );
+    // Resolve existing ancestors too, so new files cannot escape through a
+    // directory symlink. lstat detects dangling links and realpath fails closed.
+    let ancestor = resolvedPath;
+    while (true) {
+      try {
+        fs.lstatSync(ancestor);
+        break;
+      } catch (error: any) {
+        if (error.code !== "ENOENT") throw error;
+        const parent = path.dirname(ancestor);
+        if (parent === ancestor) throw error;
+        ancestor = parent;
+      }
     }
+    const realBase = fs.realpathSync(basePath);
+    const realAncestor = fs.realpathSync(ancestor);
+    if (!isWithin(realBase, realAncestor)) rejectPath();
 
     return resolvedPath;
   };
